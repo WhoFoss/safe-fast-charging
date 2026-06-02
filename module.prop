@@ -1,0 +1,6 @@
+id=safe_fast_charging
+name=Carregamento Rápido Seguro
+version=4.0
+versionCode=8
+author=WhoFoss
+description=Módulo de carregamento seguro para Redmi Note 13 4G. Carregamento a 3A (3000mA) com proteção térmica ativa. Reduz corrente automaticamente acima de 40°C. Mantém proteções JEITA e step charging. Otimizado para bateria de longa duração. Use apenas com carregador original de 33W.
