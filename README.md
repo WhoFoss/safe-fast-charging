@@ -1,1 +1,1 @@
-# Carregamento-seguro-
+#Sapphire #safe_fast_charging #Module
