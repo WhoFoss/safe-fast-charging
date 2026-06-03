@@ -1,15 +1,16 @@
 #!/system/bin/sh
-
+# service.sh — Carregamento Seguro (Redmi Note 13 4G)
+# Executa em late_start service mode (Magisk)
 MODDIR=${0%/*}
 
 # ============================================================
 # CONFIGURAÇÃO
 # ============================================================
 LOG=/data/local/tmp/safe_charging.log
-TEMP_LIMIT=40          # °C — acima disso, reduz corrente
+TEMP_LIMIT=41          # °C — acima disso, reduz corrente
 TEMP_RESUME=37         # °C — abaixo disso, restaura corrente
-CURRENT_NORMAL=4000000   # µA — corrente máxima normal (4A)
-CURRENT_THROTTLE=2000000 # µA — corrente reduzida (2A) quando quente
+CURRENT_NORMAL=6000000   # µA — teto do kernel (corrente real limitada pelo HVDCP2 ~2.9A)
+CURRENT_THROTTLE=3000000 # µA — corrente reduzida quando quente
 POLL_INTERVAL=30       # segundos entre cada leitura de temperatura
 
 # Nós sysfs
@@ -24,11 +25,6 @@ NODE_RESTRICT=/sys/class/qcom-battery/restrict_chg
 NODE_FSYNC=/sys/module/sync/parameters/fsync_enabled
 NODE_POWER_EFF=/sys/module/workqueue/parameters/power_efficient
 
-# Nós IIO do PMIC PM7250B (qpnp-smb5) — confirmados no sapphire
-IIO_BASE=/sys/devices/platform/soc/1c40000.qcom,spmi/spmi-0/0-02/1c40000.qcom,spmi:qcom,pm7250b@2:qcom,qpnp-smb5/iio:device6
-IIO_PD_ACTIVE=${IIO_BASE}/in_index_usb_pd_active_input
-IIO_APSD_RERUN=${IIO_BASE}/in_activity_usb_apsd_rerun_input
-
 # Zonas térmicas confirmadas no sapphire (SM6225)
 # zone34 = battery       (~31°C em repouso)
 # zone20 = charge-therm-usr  (sensor físico próximo ao carregador)
@@ -36,6 +32,9 @@ IIO_APSD_RERUN=${IIO_BASE}/in_activity_usb_apsd_rerun_input
 NODE_TEMP_BATTERY=/sys/class/thermal/thermal_zone34/temp
 NODE_TEMP_CHARGER=/sys/class/thermal/thermal_zone20/temp
 NODE_TEMP_PMIC=/sys/class/thermal/thermal_zone23/temp
+
+# Path base do PMIC — fixo no sapphire, só o iio:deviceN muda entre boots
+PMIC_BASE=/sys/devices/platform/soc/1c40000.qcom,spmi/spmi-0/0-02/1c40000.qcom,spmi:qcom,pm7250b@2:qcom,qpnp-smb5
 
 # ============================================================
 # FUNÇÕES UTILITÁRIAS
@@ -102,6 +101,16 @@ read_temp() {
     echo "$best"
 }
 
+# Descobre dinamicamente o path IIO do qpnp-smb5
+# O PMIC_BASE é fixo — só o iio:deviceN muda entre boots
+find_iio_base() {
+    local dev
+    for dev in "${PMIC_BASE}"/iio:device*; do
+        [ -d "$dev" ] && echo "$dev" && return 0
+    done
+    return 1
+}
+
 # ============================================================
 # INICIALIZAÇÃO (executa uma vez no boot)
 # ============================================================
@@ -156,17 +165,25 @@ log "Corrente normal: ${CURRENT_NORMAL} µA | Throttle: ${CURRENT_THROTTLE} µA"
 # e limitando o input para 100mA. Desativar PD via IIO e forçar
 # redetecção do carregador restaura HVDCP2 (~2.9A de input).
 # Delay de 30s para garantir que o USB stack já inicializou.
+# O iio:deviceN é descoberto via PMIC_BASE — path fixo no sapphire.
 # ============================================================
 
 (
     sleep 30
-    if [ -e "$IIO_PD_ACTIVE" ] && [ -e "$IIO_APSD_RERUN" ]; then
-        echo 0 > "$IIO_PD_ACTIVE" 2>/dev/null
-        sleep 1
-        echo 1 > "$IIO_APSD_RERUN" 2>/dev/null
-        log "[HVDCP] PD desativado via IIO + APSD rerun executado"
+    IIO_BASE=$(find_iio_base)
+    if [ -n "$IIO_BASE" ]; then
+        IIO_PD_ACTIVE=${IIO_BASE}/in_index_usb_pd_active_input
+        IIO_APSD_RERUN=${IIO_BASE}/in_activity_usb_apsd_rerun_input
+        if [ -e "$IIO_PD_ACTIVE" ] && [ -e "$IIO_APSD_RERUN" ]; then
+            echo 0 > "$IIO_PD_ACTIVE" 2>/dev/null
+            sleep 1
+            echo 1 > "$IIO_APSD_RERUN" 2>/dev/null
+            log "[HVDCP] PD desativado via IIO + APSD rerun executado (${IIO_BASE})"
+        else
+            log "[HVDCP] Nós IIO não encontrados em ${IIO_BASE}"
+        fi
     else
-        log "[HVDCP] Nós IIO não encontrados — fix não aplicado"
+        log "[HVDCP] Device IIO do smb5 não localizado em ${PMIC_BASE}"
     fi
 ) &
 
